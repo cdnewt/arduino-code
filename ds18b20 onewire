@@ -1,0 +1,145 @@
+// change the following things for different iterations of arduinos and temp sensors
+//
+//  THE TOPIC const char* sensorTopic = "vanSense/enviro/exterior/temp";
+//  THE MQTT CLIENT ID   const char* clientID = "vanSenseExteriorTempMonitor"; // MQTT client ID
+//  THE WIFI NETWORK WiFi.begin("newtonsRealm", "optimusprime");
+//  THE BAUD RATE OF YOUR SERIAL CONSOLE IF MONITORING Serial.begin(115200);
+//
+//  THIS CODE IS TO READ TEMP FROM A DS18b20 TEMP SENSOR, CONNECT TO WIFI, LOOKUP multicast DNS vansense.local
+//  AND CONNECT TO THE MOQUITTO MQTT MESSAGE QUEUE AND PUBLISH TEMPERATURE READINGS TO IT EVERY 60 SECONDS
+//  SEPARATE CODE RUNNING ON RASPBERRY PI VANSENSE.LOCAL called BLYNK.py in ~/vansense HOME DIR of NEWTON THEN
+//  RELAYS THOSE READINGS FROM THE MESSAGE QUEUE TO BLYNK SERVERS SO THAT THE iphone/android BLYNK APP CAN
+//  DISPLAY THEM
+//
+//
+
+
+//Import libraries
+  #include <OneWire.h>
+  #include <DallasTemperature.h>
+  #include "PubSubClient.h" // Connect and publish to the MQTT broker
+  #include <ESP8266WiFi.h>
+  #include <mDNSResolver.h>  
+  #include <NTPClient.h>
+ 
+  int connect=0;
+  int server=0;
+  int mq=0;
+  int ntpTime=0;
+ 
+  WiFiClient wifiClient;
+  WiFiUDP udp;
+  WiFiUDP ntpUDP;
+  mDNSResolver::Resolver resolver(udp);
+
+ 
+  //Declare data input pin
+  #define ONE_WIRE_BUS D4
+   
+  OneWire oneWire(ONE_WIRE_BUS);
+  DallasTemperature sensors(&oneWire);
+
+ 
+void connect_MQTT(){
+
+}
+
+   
+  void setup()
+  {
+    delay(1000);
+    Serial.begin(115200);
+    sensors.begin();
+  }
+
+  void getWifi(){
+    WiFi.disconnect();
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin("newtonsRealm", "optimusprime");
+    Serial.println("Initiating wifi connection...");
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(5000);
+     Serial.print("*");
+    }
+    Serial.println("");
+    Serial.println("WiFi connected...");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+
+   
+  void loop()
+  {
+
+    Serial.println("VERSION 1.0.0");
+    Serial.println("number of sensors:");
+    Serial.println(sensors.getDeviceCount());
+    Serial.println("parasite mode:");
+    Serial.println(sensors.isParasitePowerMode());
+    sensors.requestTemperatures();
+    float t = sensors.getTempCByIndex(0);
+    if( t < -100.0)     // not possible, something failed.
+    {
+      Serial.println( F( "Error, first DS18B20 miscommunication...skipping this reading..."));
+    }
+
+    if (connect<1){
+       getWifi();
+       connect=1;
+    }
+    NTPClient timeClient(ntpUDP, "pool.ntp.org", -14400, 60000);
+    if (ntpTime<1){
+       timeClient.begin();
+       ntpTime=1;
+    }
+    // UPDATE NTP TIME
+    timeClient.update();
+    Serial.println("unix timestamp:");
+    Serial.println(timeClient.getEpochTime());
+   
+    #define TARGET_HOSTNAME "vansense.local"
+    IPAddress vansenseIP = resolver.search(TARGET_HOSTNAME);
+    while (server<1){
+      Serial.printf("refreshing mDNS address cache for %s\n", TARGET_HOSTNAME);
+      IPAddress vansenseIP = resolver.search(TARGET_HOSTNAME);
+      if( vansenseIP == IPADDR_NONE) {
+        Serial.println("mDNS: no answer found");
+      } else {
+        Serial.println(vansenseIP);
+        server=1;
+      }
+      delay(1000);
+    }
+    //const char* mqtt_server = answer;  // IP of the MQTT broker
+    const char* sensorTopic = "vanSense/water/freshwater/temp";
+    const char* mqtt_username = "vansense"; // MQTT username
+    const char* mqtt_password = "optimusprime"; // MQTT password
+    const char* clientID = "vanSenseFreshwaterTempMonitor"; // MQTT client ID
+    PubSubClient client(vansenseIP, 1883, wifiClient);
+   
+    if (client.connect(clientID)) {
+      Serial.println("Connected to MQTT Broker!");
+    } else {
+      Serial.println("Connection to MQTT Broker failed...");
+    }
+    boolean ret=false;
+   
+    ret=client.publish(sensorTopic, String(t).c_str(),1);
+    if (ret) {
+       Serial.println("Temperature sent to MQTT!");
+       Serial.println(sensorTopic);
+    }
+    else {
+      Serial.print(client.state());
+      Serial.println("Temperature failed to send. Will try again next time.... ");
+    }
+
+    client.disconnect();  // disconnect from the MQTT broker
+    Serial.print(t);
+    Serial.println(" degrees C");
+    Serial.println("Waiting 60 seconds");
+    delay(60000);
+    server=0;
+  }
+
